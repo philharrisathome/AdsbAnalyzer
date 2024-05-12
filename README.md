@@ -1,2 +1,2 @@
 # AdsbAnalyzer
-Performance analysis of ADSB messages
+A very simple framework for analysis of live & recorded ADSB messages
