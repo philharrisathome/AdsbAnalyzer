@@ -163,7 +163,7 @@ def color(
 class Tile(object):
     """Base class for all Dashing tiles."""
 
-    def __init__(self, title: str = "", border_color: Optional[Color] = None, color: Color = 0) -> None:
+    def __init__(self, title: str = "", border_color: Optional[Color] = None, color: Color = 0, max_height: Optional[int] = None, max_width: Optional[int] = None) -> None:
         """
         :param title: Title of the tile
         :param border_color: Color of the border. Setting this will enable a border and shrinks available size by 1
@@ -173,6 +173,8 @@ class Tile(object):
         self.title = title
         self.color = color
         self.border_color = border_color
+        self.max_height = max_height
+        self.max_width = max_width
         self._terminal: Optional[Terminal] = None
 
     def _display(self, tbox: TBox, parent: Optional["Tile"]) -> None:
@@ -202,11 +204,16 @@ class Tile(object):
             )
             if self.title:
                 # top border with title
-                margin = int((tbox.w - len(self.title)) / 20)
+                # margin = max(0, int((tbox.w - tbox.t.length(self.title)) / 20))
+                margin = 1
+                title = tbox.t.truncate(self.title, tbox.w - 4*margin - 2)
                 border_t = (
-                    border_h * (margin - 1) + " " * margin + self.title + " " * margin
+                    border_h * margin 
+                    + " " * margin 
+                    + title 
+                    + " " * margin 
+                    + border_h * (tbox.w - 3*margin - 2 - tbox.t.length(title))
                 )
-                border_t += (tbox.w - len(border_t) - 2) * border_h
             else:
                 # top border without title
                 border_t = border_h * (tbox.w - 2)
@@ -215,10 +222,14 @@ class Tile(object):
             print(tbox.t.move(tbox.x, tbox.y) + border_tl + border_t + border_tr)
         elif self.title:
             # top title without border
-            margin = int((tbox.w - len(self.title)) / 20)
+            # margin = max(0, int((tbox.w - tbox.t.length(self.title)) / 20))
+            margin = 2
 
+            title = tbox.t.truncate(self.title, tbox.w - 2*margin - 1)
             title = (
-                " " * margin + self.title + " " * (tbox.w - margin - len(self.title))
+                " " * margin
+                + title 
+                + " " * (tbox.w - margin + 1 - tbox.t.length(title))
             )
             print(tbox.t.move(tbox.x, tbox.y) + title)
 
@@ -270,20 +281,58 @@ class Split(Tile):
             return
 
         if isinstance(self, VSplit):
-            item_height = tbox.h // len(self.items)
-            item_width = tbox.w
+            variable_height = tbox.h
+            variable_items = len(self.items)
+            
+            item_height = [-1] * len(self.items)
+            for idx, i in enumerate(self.items):
+                if i.max_height:
+                    item_height[idx] = i.max_height
+                    variable_height -= i.max_height
+                    variable_items -= 1
+
+            if variable_height < 0:
+                variable_height = tbox.h
+                variable_items = len(self.items)
+                item_height = [-1] * len(self.items)
+
+            h = variable_height // variable_items
+            for idx, i in enumerate(self.items):
+                if item_height[idx] < 0: item_height[idx] = h
+            item_height[-1] += variable_height % variable_items
+
+            item_width = [tbox.w] * len(self.items)
         else:
-            item_height = tbox.h
-            item_width = tbox.w // len(self.items)
+            variable_width = tbox.w
+            variable_items = len(self.items)
+            
+            item_width = [-1] * len(self.items)
+            for idx, i in enumerate(self.items):
+                if i.max_width:
+                    item_width[idx] = i.max_width
+                    variable_width -= i.max_width
+                    variable_items -= 1
+
+            if variable_width < 0:
+                variable_width = tbox.w
+                variable_items = len(self.items)
+                item_width = [-1] * len(self.items)
+
+            w = variable_width // variable_items
+            for idx, i in enumerate(self.items):
+                if item_width[idx] < 0: item_width[idx] = w
+            item_width[-1] += variable_width % variable_items
+
+            item_height = [tbox.h] * len(self.items)
 
         x = tbox.x
         y = tbox.y
-        for i in self.items:
-            i._display(TBox(tbox.t, x, y, item_width, item_height), self)
+        for idx, i in enumerate(self.items):
+            i._display(TBox(tbox.t, x, y, item_width[idx], item_height[idx]), self)
             if isinstance(self, VSplit):
-                x += item_height
+                x += item_height[idx]
             else:
-                y += item_width
+                y += item_width[idx]
 
         # Fill leftover area
         # FIXME
@@ -320,12 +369,15 @@ class Text(Tile):
 
     def _display(self, tbox: TBox, parent: Optional[Tile]) -> None:
         tbox = self._draw_borders_and_title(tbox)
+        if tbox.h <= 0:
+            return      # Should probably fix the pad() generator
         for dx, line in pad(self.text.splitlines()[-(tbox.h) :], tbox.h):
+            line = tbox.t.truncate(line, tbox.w)
             print(
                 tbox.t.color(self.color)
                 + tbox.t.move(tbox.x + dx, tbox.y)
                 + line
-                + " " * (tbox.w - len(line))
+                + " " * (tbox.w - tbox.t.length(line))
             )
 
 
@@ -340,12 +392,15 @@ class Log(Tile):
 
     def _display(self, tbox: TBox, parent: Optional[Tile]) -> None:
         tbox = self._draw_borders_and_title(tbox)
+        if tbox.h <= 0:
+            return      # Should probably fix the pad() generator
         n_logs = len(self.logs)
         log_range = min(n_logs, tbox.h)
         start = n_logs - log_range
         print(tbox.t.color(self.color))
         for dx, line in pad((self.logs[ln] for ln in range(start, n_logs)), tbox.h):
-            print(tbox.t.move(tbox.x + dx, tbox.y) + line + " " * (tbox.w - len(line)))
+            line = tbox.t.truncate(line, tbox.w)
+            print(tbox.t.move(tbox.x + dx, tbox.y) + line + " " * (tbox.w - tbox.t.length(line)))
 
     def append(self, msg: str) -> None:
         """Append a new log message at the bottom"""
@@ -363,7 +418,7 @@ class HGauge(Tile):
     def _display(self, tbox: TBox, parent: Optional[Tile]) -> None:
         tbox = self._draw_borders_and_title(tbox)
         if self.label:
-            wi = (tbox.w - len(self.label) - 3) * self.value / 100
+            wi = (tbox.w - tbox.t.length(self.label) - 3) * self.value / 100
             v_center = int((tbox.h) * 0.5)
         else:
             wi = tbox.w * self.value / 100.0
@@ -372,7 +427,7 @@ class HGauge(Tile):
         bar = hbar_elements[-1] * int(wi) + hbar_elements[index]
         print(tbox.t.color(self.color) + tbox.t.move(tbox.x, tbox.y + 1))
         if self.label:
-            n_pad = tbox.w - 1 - len(self.label) - len(bar)
+            n_pad = tbox.w - 1 - tbox.t.length(self.label) - len(bar)
         else:
             n_pad = tbox.w - len(bar)
         bar += hbar_elements[0] * n_pad
@@ -384,7 +439,7 @@ class HGauge(Tile):
                     # draw label
                     print(m + self.label + " " + bar)
                 else:
-                    print(m + " " * len(self.label) + " " + bar)
+                    print(m + " " * tbox.t.length(self.label) + " " + bar)
             else:
                 print(m + bar)
 
